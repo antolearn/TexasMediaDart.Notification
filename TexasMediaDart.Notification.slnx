@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/TexasMediaDart.Notification.Api/TexasMediaDart.Notification.Api.csproj" />
+    <Project Path="src/TexasMediaDart.Notification.Application/TexasMediaDart.Notification.Application.csproj" />
+    <Project Path="src/TexasMediaDart.Notification.Domain/TexasMediaDart.Notification.Domain.csproj" />
+    <Project Path="src/TexasMediaDart.Notification.Infrastructure/TexasMediaDart.Notification.Infrastructure.csproj" />
+  </Folder>
+</Solution>

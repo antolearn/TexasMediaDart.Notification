@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using TexasMediaDart.Notification.Application.Notifications.EmailVerification;
+using TexasMediaDart.Notification.Application.Notifications.UserInvitation;
 
 namespace TexasMediaDart.Notification.Application;
 
@@ -10,6 +11,8 @@ public static class DependencyInjection
     {
         services.AddScoped<
             SendEmailVerificationCommandHandler>();
+        services.AddScoped<
+            SendUserInvitationNotificationCommandHandler>();
 
         return services;
     }

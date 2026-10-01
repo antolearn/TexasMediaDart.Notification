@@ -1,0 +1,38 @@
+name: Notification API CI
+
+on:
+  pull_request:
+    branches:
+      - main
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Notification API
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Display .NET information
+        run: dotnet --info
+
+      - name: Restore
+        run: dotnet restore TexasMediaDart.Notification.slnx
+
+      - name: Build
+        run: >
+          dotnet build
+          TexasMediaDart.Notification.slnx
+          --configuration Release
+          --no-restore

@@ -18,8 +18,13 @@ env:
   API_PROJECT: 'src/TexasMediaDart.Notification.Api/TexasMediaDart.Notification.Api.csproj'
   API_PUBLISH_PATH: '${{ github.workspace }}/publish'
   AZURE_WEBAPP_NAME: 'texasmediadart-notification-api-dev'
+  AZURE_RESOURCE_GROUP: 'TexasMediaDart-Dev'
 
 jobs:
+
+  # ============================================================
+  # Build
+  # ============================================================
 
   build:
     name: Build Notification API Release
@@ -29,13 +34,26 @@ jobs:
       build_version: ${{ steps.version.outputs.version }}
 
     steps:
+      # --------------------------------------------------------
+      # Checkout
+      # --------------------------------------------------------
+
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      # --------------------------------------------------------
+      # .NET
+      # --------------------------------------------------------
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      # --------------------------------------------------------
+      # Version
+      # Format: yyyy.MM.dd.####
+      # --------------------------------------------------------
 
       - name: Generate build version
         id: version
@@ -53,8 +71,16 @@ jobs:
           echo "### Notification API Release Version" >> "$GITHUB_STEP_SUMMARY"
           echo "**$VERSION**" >> "$GITHUB_STEP_SUMMARY"
 
+      # --------------------------------------------------------
+      # Restore
+      # --------------------------------------------------------
+
       - name: Restore solution
         run: dotnet restore ${{ env.SOLUTION_FILE }}
+
+      # --------------------------------------------------------
+      # Build
+      # --------------------------------------------------------
 
       - name: Build solution
         run: >
@@ -62,6 +88,10 @@ jobs:
           ${{ env.SOLUTION_FILE }}
           --configuration ${{ env.BUILD_CONFIGURATION }}
           --no-restore
+
+      # --------------------------------------------------------
+      # Publish
+      # --------------------------------------------------------
 
       - name: Publish Notification API
         run: >
@@ -72,6 +102,10 @@ jobs:
           --output ${{ env.API_PUBLISH_PATH }}
           /p:InformationalVersion=${{ env.BUILD_VERSION }}
           /p:IncludeSourceRevisionInInformationalVersion=false
+
+      # --------------------------------------------------------
+      # Package
+      # --------------------------------------------------------
 
       - name: Create versioned API package
         shell: bash
@@ -86,6 +120,10 @@ jobs:
           echo "Notification API package created:"
           echo "$PACKAGE"
 
+      # --------------------------------------------------------
+      # Upload artifact
+      # --------------------------------------------------------
+
       - name: Upload Notification API artifact
         uses: actions/upload-artifact@v4
         with:
@@ -93,6 +131,11 @@ jobs:
           path: artifacts/TexasMediaDart.Notification.Api-${{ env.BUILD_VERSION }}.zip
           if-no-files-found: error
           retention-days: 30
+
+
+  # ============================================================
+  # Deploy DEV
+  # ============================================================
 
   deploy-api-dev:
     name: Deploy Notification API to DEV
@@ -103,10 +146,18 @@ jobs:
       name: dev
 
     steps:
+      # --------------------------------------------------------
+      # Version
+      # --------------------------------------------------------
+
       - name: Display version
         run: |
           echo "Deploying Notification API Version:"
           echo "${{ needs.build.outputs.build_version }}"
+
+      # --------------------------------------------------------
+      # Download artifact
+      # --------------------------------------------------------
 
       - name: Download Notification API artifact
         uses: actions/download-artifact@v4
@@ -114,13 +165,17 @@ jobs:
           name: TexasMediaDart.Notification.Api-${{ needs.build.outputs.build_version }}
           path: artifacts
 
+      # --------------------------------------------------------
+      # Verify package
+      # --------------------------------------------------------
+
       - name: Verify API package
         shell: bash
         run: |
           PACKAGE="artifacts/TexasMediaDart.Notification.Api-${{ needs.build.outputs.build_version }}.zip"
 
           if [ ! -f "$PACKAGE" ]; then
-            echo "Notification API package was not found:"
+            echo "ERROR: Notification API package was not found:"
             echo "$PACKAGE"
             exit 1
           fi
@@ -128,12 +183,20 @@ jobs:
           echo "Notification API package:"
           echo "$PACKAGE"
 
+      # --------------------------------------------------------
+      # Azure OIDC Login
+      # --------------------------------------------------------
+
       - name: Login to Azure using OIDC
         uses: azure/login@v3
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # --------------------------------------------------------
+      # Validate GitHub DEV configuration
+      # --------------------------------------------------------
 
       - name: Validate DEV configuration
         shell: bash
@@ -177,6 +240,10 @@ jobs:
 
           echo "Notification DEV configuration is available."
 
+      # --------------------------------------------------------
+      # Configure Azure App Service
+      # --------------------------------------------------------
+
       - name: Configure DEV application settings
         shell: bash
         env:
@@ -185,7 +252,7 @@ jobs:
         run: |
           az webapp config appsettings set \
             --name "${{ env.AZURE_WEBAPP_NAME }}" \
-            --resource-group "TexasMediaDart-Dev" \
+            --resource-group "${{ env.AZURE_RESOURCE_GROUP }}" \
             --settings \
               "ServiceAuthentication__ApiKey=$NOTIFICATION_SERVICE_API_KEY" \
               "Email__Provider=${{ vars.EMAIL_PROVIDER }}" \
@@ -193,6 +260,10 @@ jobs:
               "Email__SenderAddress=${{ vars.EMAIL_SENDER_ADDRESS }}" \
               "Email__SenderDisplayName=${{ vars.EMAIL_SENDER_DISPLAY_NAME }}" \
               "Email__FrontendBaseUrl=${{ vars.FRONTEND_BASE_URL }}"
+
+      # --------------------------------------------------------
+      # Verify Azure App Service settings
+      # --------------------------------------------------------
 
       - name: Verify DEV application settings
         shell: bash
@@ -207,9 +278,10 @@ jobs:
           )
 
           for SETTING in "${REQUIRED_SETTINGS[@]}"; do
+
             SETTING_EXISTS=$(az webapp config appsettings list \
               --name "${{ env.AZURE_WEBAPP_NAME }}" \
-              --resource-group "TexasMediaDart-Dev" \
+              --resource-group "${{ env.AZURE_RESOURCE_GROUP }}" \
               --query "[?name=='$SETTING'].name | [0]" \
               --output tsv)
 
@@ -221,30 +293,99 @@ jobs:
             echo "$SETTING exists."
           done
 
+      # --------------------------------------------------------
+      # Deploy
+      # --------------------------------------------------------
+
       - name: Deploy Notification API to Azure App Service
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ env.AZURE_WEBAPP_NAME }}
           package: artifacts/TexasMediaDart.Notification.Api-${{ needs.build.outputs.build_version }}.zip
 
-      - name: Verify Notification API health
+      # --------------------------------------------------------
+      # Get actual Azure hostname
+      #
+      # Secure unique default hostname is enabled for this
+      # App Service. Therefore, do not assume the hostname is:
+      #
+      # <app-name>.azurewebsites.net
+      #
+      # Azure CLI returns the actual defaultHostName.
+      # --------------------------------------------------------
+
+      - name: Get Notification API hostname
+        id: hostname
         shell: bash
         run: |
-          HEALTH_URL="https://${{ env.AZURE_WEBAPP_NAME }}.azurewebsites.net/health/api"
+          DEFAULT_HOSTNAME=$(az webapp show \
+            --name "${{ env.AZURE_WEBAPP_NAME }}" \
+            --resource-group "${{ env.AZURE_RESOURCE_GROUP }}" \
+            --query "defaultHostName" \
+            --output tsv)
 
-          echo "Checking:"
+          if [ -z "$DEFAULT_HOSTNAME" ]; then
+            echo "ERROR: Unable to determine Notification API hostname."
+            exit 1
+          fi
+
+          echo "Notification API hostname:"
+          echo "$DEFAULT_HOSTNAME"
+
+          echo "hostname=$DEFAULT_HOSTNAME" >> "$GITHUB_OUTPUT"
+
+      # --------------------------------------------------------
+      # Health check
+      # --------------------------------------------------------
+
+      - name: Verify Notification API health
+        shell: bash
+        env:
+          DEFAULT_HOSTNAME: ${{ steps.hostname.outputs.hostname }}
+        run: |
+          HEALTH_URL="https://${DEFAULT_HOSTNAME}/health/api"
+
+          echo "Checking Notification API health:"
           echo "$HEALTH_URL"
 
           for attempt in {1..12}; do
-            if curl --fail --silent --show-error "$HEALTH_URL"; then
+
+            echo "Health check attempt $attempt of 12..."
+
+            if RESPONSE=$(curl \
+              --fail \
+              --silent \
+              --show-error \
+              "$HEALTH_URL"); then
+
+              echo ""
+              echo "Notification API health response:"
+              echo "$RESPONSE"
               echo ""
               echo "Notification API is healthy."
+
+              echo "### Notification API DEV Deployment" >> "$GITHUB_STEP_SUMMARY"
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+              echo "**Version:** ${{ needs.build.outputs.build_version }}" >> "$GITHUB_STEP_SUMMARY"
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+              echo "**Host:** $DEFAULT_HOSTNAME" >> "$GITHUB_STEP_SUMMARY"
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+              echo "**Health:** Healthy" >> "$GITHUB_STEP_SUMMARY"
+
               exit 0
             fi
 
-            echo "Health check attempt $attempt failed. Waiting 10 seconds..."
-            sleep 10
+            echo ""
+            echo "Health check attempt $attempt failed."
+
+            if [ "$attempt" -lt 12 ]; then
+              echo "Waiting 10 seconds..."
+              sleep 10
+            fi
           done
 
-          echo "ERROR: Notification API health check failed."
+          echo ""
+          echo "ERROR: Notification API health check failed after 12 attempts."
+          echo "URL: $HEALTH_URL"
+
           exit 1

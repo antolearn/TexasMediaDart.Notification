@@ -23,7 +23,7 @@ env:
 jobs:
 
   # ============================================================
-  # Build
+  # BUILD
   # ============================================================
 
   build:
@@ -34,6 +34,7 @@ jobs:
       build_version: ${{ steps.version.outputs.version }}
 
     steps:
+
       # --------------------------------------------------------
       # Checkout
       # --------------------------------------------------------
@@ -51,7 +52,7 @@ jobs:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
       # --------------------------------------------------------
-      # Version
+      # Generate release version
       # Format: yyyy.MM.dd.####
       # --------------------------------------------------------
 
@@ -60,7 +61,7 @@ jobs:
         shell: bash
         run: |
           DATE=$(date +'%Y.%m.%d')
-          BUILD=$(printf "%04d" "${{ github.run_number }}")
+          BUILD=$(printf "%04d" "$GITHUB_RUN_NUMBER")
           VERSION="$DATE.$BUILD"
 
           echo "BUILD_VERSION=$VERSION" >> "$GITHUB_ENV"
@@ -115,7 +116,10 @@ jobs:
           PACKAGE="artifacts/TexasMediaDart.Notification.Api-${BUILD_VERSION}.zip"
 
           cd "${{ env.API_PUBLISH_PATH }}"
-          zip -r "${{ github.workspace }}/$PACKAGE" .
+
+          zip -r \
+            "${{ github.workspace }}/$PACKAGE" \
+            .
 
           echo "Notification API package created:"
           echo "$PACKAGE"
@@ -134,7 +138,7 @@ jobs:
 
 
   # ============================================================
-  # Deploy DEV
+  # DEPLOY DEV
   # ============================================================
 
   deploy-api-dev:
@@ -146,8 +150,9 @@ jobs:
       name: dev
 
     steps:
+
       # --------------------------------------------------------
-      # Version
+      # Display version
       # --------------------------------------------------------
 
       - name: Display version
@@ -184,7 +189,7 @@ jobs:
           echo "$PACKAGE"
 
       # --------------------------------------------------------
-      # Azure OIDC Login
+      # Azure login
       # --------------------------------------------------------
 
       - name: Login to Azure using OIDC
@@ -209,39 +214,55 @@ jobs:
           FRONTEND_BASE_URL: ${{ vars.FRONTEND_BASE_URL }}
         run: |
           if [ -z "$NOTIFICATION_SERVICE_API_KEY" ]; then
-            echo "ERROR: NOTIFICATION_SERVICE_API_KEY is missing or empty."
+            echo "ERROR: GitHub secret NOTIFICATION_SERVICE_API_KEY is missing or empty."
             exit 1
           fi
 
           if [ -z "$EMAIL_CONNECTION_STRING" ]; then
-            echo "ERROR: AZURE_COMMUNICATION_EMAIL_CONNECTION_STRING is missing or empty."
+            echo "ERROR: GitHub secret AZURE_COMMUNICATION_EMAIL_CONNECTION_STRING is missing or empty."
             exit 1
           fi
 
           if [ -z "$EMAIL_PROVIDER" ]; then
-            echo "ERROR: EMAIL_PROVIDER is missing or empty."
+            echo "ERROR: GitHub variable EMAIL_PROVIDER is missing or empty."
             exit 1
           fi
 
           if [ -z "$EMAIL_SENDER_ADDRESS" ]; then
-            echo "ERROR: EMAIL_SENDER_ADDRESS is missing or empty."
+            echo "ERROR: GitHub variable EMAIL_SENDER_ADDRESS is missing or empty."
             exit 1
           fi
 
           if [ -z "$EMAIL_SENDER_DISPLAY_NAME" ]; then
-            echo "ERROR: EMAIL_SENDER_DISPLAY_NAME is missing or empty."
+            echo "ERROR: GitHub variable EMAIL_SENDER_DISPLAY_NAME is missing or empty."
             exit 1
           fi
 
           if [ -z "$FRONTEND_BASE_URL" ]; then
-            echo "ERROR: FRONTEND_BASE_URL is missing or empty."
+            echo "ERROR: GitHub variable FRONTEND_BASE_URL is missing or empty."
             exit 1
           fi
 
-          echo "Notification DEV configuration is available."
+          echo "Required Notification DEV configuration is available."
+
+          echo "NOTIFICATION_SERVICE_API_KEY is configured."
+          echo "AZURE_COMMUNICATION_EMAIL_CONNECTION_STRING is configured."
+          echo "EMAIL_PROVIDER is configured."
+          echo "EMAIL_SENDER_ADDRESS is configured."
+          echo "EMAIL_SENDER_DISPLAY_NAME is configured."
+          echo "FRONTEND_BASE_URL is configured."
 
       # --------------------------------------------------------
       # Configure Azure App Service
+      #
+      # IMPORTANT:
+      #
+      # ServiceAuthentication__ApiKey is the inbound API key
+      # expected by [ServiceApiKeyAuthorize].
+      #
+      # Calling services send the same key in:
+      #
+      # X-API-Key
       # --------------------------------------------------------
 
       - name: Configure DEV application settings
@@ -249,20 +270,27 @@ jobs:
         env:
           NOTIFICATION_SERVICE_API_KEY: ${{ secrets.NOTIFICATION_SERVICE_API_KEY }}
           EMAIL_CONNECTION_STRING: ${{ secrets.AZURE_COMMUNICATION_EMAIL_CONNECTION_STRING }}
+          EMAIL_PROVIDER: ${{ vars.EMAIL_PROVIDER }}
+          EMAIL_SENDER_ADDRESS: ${{ vars.EMAIL_SENDER_ADDRESS }}
+          EMAIL_SENDER_DISPLAY_NAME: ${{ vars.EMAIL_SENDER_DISPLAY_NAME }}
+          FRONTEND_BASE_URL: ${{ vars.FRONTEND_BASE_URL }}
         run: |
           az webapp config appsettings set \
             --name "${{ env.AZURE_WEBAPP_NAME }}" \
             --resource-group "${{ env.AZURE_RESOURCE_GROUP }}" \
             --settings \
               "ServiceAuthentication__ApiKey=$NOTIFICATION_SERVICE_API_KEY" \
-              "Email__Provider=${{ vars.EMAIL_PROVIDER }}" \
+              "Email__Provider=$EMAIL_PROVIDER" \
               "Email__ConnectionString=$EMAIL_CONNECTION_STRING" \
-              "Email__SenderAddress=${{ vars.EMAIL_SENDER_ADDRESS }}" \
-              "Email__SenderDisplayName=${{ vars.EMAIL_SENDER_DISPLAY_NAME }}" \
-              "Email__FrontendBaseUrl=${{ vars.FRONTEND_BASE_URL }}"
+              "Email__SenderAddress=$EMAIL_SENDER_ADDRESS" \
+              "Email__SenderDisplayName=$EMAIL_SENDER_DISPLAY_NAME" \
+              "Email__FrontendBaseUrl=$FRONTEND_BASE_URL"
 
       # --------------------------------------------------------
       # Verify Azure App Service settings
+      #
+      # Setting names only are checked.
+      # Secret values are never printed.
       # --------------------------------------------------------
 
       - name: Verify DEV application settings
@@ -293,6 +321,8 @@ jobs:
             echo "$SETTING exists."
           done
 
+          echo "All required Notification DEV application settings exist."
+
       # --------------------------------------------------------
       # Deploy
       # --------------------------------------------------------
@@ -304,14 +334,12 @@ jobs:
           package: artifacts/TexasMediaDart.Notification.Api-${{ needs.build.outputs.build_version }}.zip
 
       # --------------------------------------------------------
-      # Get actual Azure hostname
+      # Get actual Azure App Service hostname
       #
-      # Secure unique default hostname is enabled for this
-      # App Service. Therefore, do not assume the hostname is:
+      # Secure unique default hostname may be enabled, so do
+      # not assume:
       #
       # <app-name>.azurewebsites.net
-      #
-      # Azure CLI returns the actual defaultHostName.
       # --------------------------------------------------------
 
       - name: Get Notification API hostname
@@ -335,7 +363,17 @@ jobs:
           echo "hostname=$DEFAULT_HOSTNAME" >> "$GITHUB_OUTPUT"
 
       # --------------------------------------------------------
-      # Health check
+      # Wait for restart
+      # --------------------------------------------------------
+
+      - name: Wait for Notification API startup
+        shell: bash
+        run: |
+          echo "Waiting for Notification API to restart..."
+          sleep 15
+
+      # --------------------------------------------------------
+      # API health
       # --------------------------------------------------------
 
       - name: Verify Notification API health
@@ -348,44 +386,70 @@ jobs:
           echo "Checking Notification API health:"
           echo "$HEALTH_URL"
 
-          for attempt in {1..12}; do
+          curl \
+            --fail \
+            --show-error \
+            --silent \
+            --retry 6 \
+            --retry-delay 10 \
+            --retry-all-errors \
+            "$HEALTH_URL"
 
-            echo "Health check attempt $attempt of 12..."
+          echo
+          echo "Notification API health validation passed."
 
-            if RESPONSE=$(curl \
-              --fail \
-              --silent \
-              --show-error \
-              "$HEALTH_URL"); then
+      # --------------------------------------------------------
+      # General health
+      # --------------------------------------------------------
 
-              echo ""
-              echo "Notification API health response:"
-              echo "$RESPONSE"
-              echo ""
-              echo "Notification API is healthy."
+      - name: Verify Notification health checks
+        shell: bash
+        env:
+          DEFAULT_HOSTNAME: ${{ steps.hostname.outputs.hostname }}
+        run: |
+          HEALTH_URL="https://${DEFAULT_HOSTNAME}/health"
 
-              echo "### Notification API DEV Deployment" >> "$GITHUB_STEP_SUMMARY"
-              echo "" >> "$GITHUB_STEP_SUMMARY"
-              echo "**Version:** ${{ needs.build.outputs.build_version }}" >> "$GITHUB_STEP_SUMMARY"
-              echo "" >> "$GITHUB_STEP_SUMMARY"
-              echo "**Host:** $DEFAULT_HOSTNAME" >> "$GITHUB_STEP_SUMMARY"
-              echo "" >> "$GITHUB_STEP_SUMMARY"
-              echo "**Health:** Healthy" >> "$GITHUB_STEP_SUMMARY"
+          echo "Checking Notification health:"
+          echo "$HEALTH_URL"
 
-              exit 0
-            fi
+          curl \
+            --fail \
+            --show-error \
+            --silent \
+            --retry 3 \
+            --retry-delay 5 \
+            --retry-all-errors \
+            "$HEALTH_URL"
 
-            echo ""
-            echo "Health check attempt $attempt failed."
+          echo
+          echo "Notification health checks passed."
 
-            if [ "$attempt" -lt 12 ]; then
-              echo "Waiting 10 seconds..."
-              sleep 10
-            fi
-          done
+      # --------------------------------------------------------
+      # Deployment summary
+      # --------------------------------------------------------
 
-          echo ""
-          echo "ERROR: Notification API health check failed after 12 attempts."
-          echo "URL: $HEALTH_URL"
+      - name: Write deployment summary
+        shell: bash
+        env:
+          DEFAULT_HOSTNAME: ${{ steps.hostname.outputs.hostname }}
+        run: |
+          echo "### Notification API DEV Deployment" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
 
-          exit 1
+          echo "**Version:** ${{ needs.build.outputs.build_version }}" \
+            >> "$GITHUB_STEP_SUMMARY"
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          echo "**App Service:** ${{ env.AZURE_WEBAPP_NAME }}" \
+            >> "$GITHUB_STEP_SUMMARY"
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          echo "**Host:** $DEFAULT_HOSTNAME" \
+            >> "$GITHUB_STEP_SUMMARY"
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          echo "**Status:** Deployment and health validation passed" \
+            >> "$GITHUB_STEP_SUMMARY"
